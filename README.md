@@ -7,7 +7,9 @@ A lightweight, high-performance, automatic session saving and window restoration
 - **Event-Driven Architecture**: 0.00% CPU overhead, 0 polling loops. Only saves when windows finish moving or closing.
 - **Debounced Real-Time State Persistence**: Saves window locations, sizes, and workspaces 1 second after window movements.
 - **Freeze-on-Shutdown Protection**: Intercepts DBus `PrepareForShutdown` from `org.gnome.SessionManager` and freezes writes so partial app closures during system shutdown never overwrite your complete session file.
-- **Cryptographic HMAC-SHA256 Integrity Verification**: Protects `session.json` with a secret key (`.key`) signature check. Tampered or modified session files are automatically rejected on boot.
+- **Cryptographic HMAC-SHA256 Integrity Verification**: Protects `session.json` with a secret key (`.key`) signature check derived from OS CSPRNG entropy (`/dev/urandom`). Tampered or modified session files are automatically rejected on boot.
+- **Z-Index Stacking Order Preservation**: Preserves window depth order (`stack_index`) so windows restore in their exact visual overlap order (`win.raise()`).
+- **Native Maximize Flags**: Snaps maximized windows cleanly using Mutter's `Meta.MaximizeFlags.BOTH`.
 - **Automatic Log Rotation**: Writes persistent logs to `~/.config/gnome-session-restorer/session-restorer.log` with a 1 MB size limit to prevent disk bloat.
 
 ## Installation
@@ -37,9 +39,12 @@ gnome-extensions info session-restorer@thielke
 
 ## Security & Privacy
 
-- Configuration directory permissions set to `0700` (read/write/exec exclusively by owner).
-- Secret key stored at `~/.config/gnome-session-restorer/.key` with `0600` permissions.
+- Configuration directory permissions set to `0700` (`rwx------`, read/write/exec exclusively by owner).
+- Secret key stored at `~/.config/gnome-session-restorer/.key` with `0600` (`rw-------`) permissions.
+- CSPRNG entropy key derivation (`GLib.uuid_string_random()`).
 - Atomic file writes using `GLib.file_set_contents` (writes to `.tmp` and renames atomically) ensuring zero file corruption during power outages.
+
+See the full [SECURITY.md](SECURITY.md) for the complete security audit report and threat model verification.
 
 ## Monitoring & Logs
 

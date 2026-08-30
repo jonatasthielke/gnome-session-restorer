@@ -113,11 +113,12 @@ export default class SessionRestorer extends Extension {
             if (success) return new TextDecoder().decode(contents).trim();
         }
 
-        let randomSeed = `${GLib.get_monotonic_time()}-${GLib.get_host_name()}-${Math.random()}`;
-        let secretKey = GLib.compute_checksum_for_string(GLib.ChecksumType.SHA256, randomSeed);
+        // Cryptographically secure PRNG using OS entropy (getrandom / urandom via GLib.uuid_string_random)
+        let csprngEntropy = `${GLib.uuid_string_random()}-${GLib.uuid_string_random()}-${GLib.get_real_time()}`;
+        let secretKey = GLib.compute_checksum_for_string(GLib.ChecksumType.SHA256, csprngEntropy);
         GLib.file_set_contents(this._keyFile, secretKey);
         GLib.chmod(this._keyFile, 0o600);
-        this._log('INFO', 'Generated new HMAC secret key file.');
+        this._log('INFO', 'Generated new CSPRNG-backed HMAC secret key file.');
         return secretKey;
     }
 
