@@ -514,9 +514,10 @@ export default class SessionRestorer extends Extension {
             });
             this._restoreTimeoutIds.push(cleanupTid);
 
-            // Bug 2 fix: track launched apps by (app_id + window_index within same app_id) to allow
-            // multiple windows of the same app (e.g., two Vivaldi windows)
-            let appLaunchCounts = new Map();
+            // Launch each app_id only once — apps like Vivaldi/Chrome/Firefox
+            // restore their own multiple windows internally. The window-created
+            // listener above handles positioning for each window as it appears.
+            let launchedApps = new Set();
             let delayOffset = 0;
 
             session.apps.forEach((item) => {
@@ -528,32 +529,23 @@ export default class SessionRestorer extends Extension {
                     return;
                 }
 
+                if (launchedApps.has(item.app_id)) return; // skip — app already queued
+                launchedApps.add(item.app_id);
+
                 let app = this._appSystem.lookup_app(item.app_id);
                 if (app) {
-                    // Bug 2 fix: count how many windows of this app_id are in the session and launch each one
-                    let currentCount = appLaunchCounts.get(item.app_id) || 0;
-                    appLaunchCounts.set(item.app_id, currentCount + 1);
-
-                    // Launch: first window launches the app; subsequent windows open new windows
                     let launchTid = GLib.timeout_add(GLib.PRIORITY_DEFAULT, delayOffset, () => {
                         this._restoreTimeoutIds = this._restoreTimeoutIds.filter(id => id !== launchTid);
                         try {
-                            if (currentCount === 0) {
-                                // First window: launch the application normally
-                                this._log('INFO', `Staggered launching application: ${item.app_id}`);
-                                app.launch(0, -1, Gio.AppLaunchContext.new());
-                            } else {
-                                // Subsequent windows: open a new window in the already-running app
-                                this._log('INFO', `Opening additional window (${currentCount + 1}) for: ${item.app_id}`);
-                                app.open_new_window(-1);
-                            }
+                            this._log('INFO', `Staggered launching application: ${item.app_id}`);
+                            app.launch(0, -1, Gio.AppLaunchContext.new());
                         } catch (err) {
-                            this._log('ERROR', `Failed to launch ${item.app_id} (window ${currentCount + 1}): ${err}`);
+                            this._log('ERROR', `Failed to launch ${item.app_id}: ${err}`);
                         }
                         return GLib.SOURCE_REMOVE;
                     });
                     this._restoreTimeoutIds.push(launchTid);
-                    delayOffset += 400; // 400ms stagger interval per window
+                    delayOffset += 400;
                 } else {
                     this._log('WARN', `Could not find desktop app for ID: ${item.app_id}`);
                 }
