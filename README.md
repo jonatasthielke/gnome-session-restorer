@@ -55,15 +55,15 @@ tail -f ~/.config/gnome-session-restorer/session-restorer.log
 journalctl --user -u gnome-shell -f | grep "[Session Restorer]"
 ```
 
-## Developer Guide
+## Development & Contributions
 
-### Repository Location
+### Extension Path
 `~/.local/share/gnome-shell/extensions/session-restorer@thielke`
 
-### Pushing Changes to GitHub
+### Pushing Updates
 ```bash
 cd ~/.local/share/gnome-shell/extensions/session-restorer@thielke
 git add .
-git commit -m "Your commit message"
+git commit -m "Describe your changes"
 git push origin main
 ```
