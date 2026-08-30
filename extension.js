@@ -97,7 +97,7 @@ export default class SessionRestorer extends Extension {
 
             let fileData = new TextDecoder().decode(contents);
             let expectedHash = new TextDecoder().decode(sigContents).trim();
-            let currentHash = GLib.compute_checksum_for_string(GLib.ChecksumType.SHA256, fileData);
+            let currentHash = GLib.compute_checksum_for_string(GLib.ChecksumType.SHA256, fileData, -1);
 
             if (currentHash !== expectedHash) {
                 this._log('SECURITY', `CRITICAL SECURITY ALERT: extension.js SHA-256 hash mismatch! Current: ${currentHash}, Expected: ${expectedHash}`);
@@ -150,7 +150,7 @@ export default class SessionRestorer extends Extension {
 
         // Cryptographically secure PRNG using OS entropy (getrandom / urandom via GLib.uuid_string_random)
         let csprngEntropy = `${GLib.uuid_string_random()}-${GLib.uuid_string_random()}-${GLib.get_real_time()}`;
-        let secretKey = GLib.compute_checksum_for_string(GLib.ChecksumType.SHA256, csprngEntropy);
+        let secretKey = GLib.compute_checksum_for_string(GLib.ChecksumType.SHA256, csprngEntropy, -1);
         GLib.file_set_contents(this._keyFile, secretKey);
         GLib.chmod(this._keyFile, 0o600);
         this._log('INFO', 'Generated new CSPRNG-backed HMAC secret key file.');
@@ -159,7 +159,7 @@ export default class SessionRestorer extends Extension {
 
     _computeHMAC(dataString) {
         let secretKey = this._getSecretKey();
-        return GLib.compute_checksum_for_string(GLib.ChecksumType.SHA256, `${dataString}:${secretKey}`);
+        return GLib.compute_checksum_for_string(GLib.ChecksumType.SHA256, `${dataString}:${secretKey}`, -1);
     }
 
     _connectShutdownSignals() {
