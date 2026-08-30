@@ -67,7 +67,7 @@ export default class SessionRestorer extends Extension {
                     this._sessionProxy.init_finish(res);
                     this._shutdownSignalId = this._sessionProxy.connectSignal('PrepareForShutdown', () => {
                         this._isShuttingDown = true;
-                        this._saveCurrentSession();
+                        console.log('[Session Restorer] PrepareForShutdown signal received. Session state frozen.');
                     });
                 } catch (e) {
                     console.error('[Session Restorer] Failed to connect DBus shutdown signal:', e);
@@ -108,6 +108,11 @@ export default class SessionRestorer extends Extension {
     }
 
     _saveCurrentSession() {
+        if (this._isShuttingDown) {
+            console.log('[Session Restorer] Shutdown in progress. Preserving last complete session on disk.');
+            return;
+        }
+
         try {
             let workspaceManager = global.workspace_manager;
             let nWorkspaces = workspaceManager.n_workspaces;
