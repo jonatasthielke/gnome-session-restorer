@@ -1,3 +1,32 @@
-.DS_Store
+# Linux & System Runtime files
 *.log
+*.tmp
+*.bak
+*.swp
+*~
+.key
+session.json
+session-restorer.log
+
+# Build & Release Archives
+*.zip
+*.tar.gz
+*.shell-extension.zip
+dist/
+build/
+
+# IDEs and Editors
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+
+# OS Generated Files
+.DS_Store
+Thumbs.db
+.directory
+
+# Node & Package Managers
 node_modules/
+package-lock.json
+yarn.lock
