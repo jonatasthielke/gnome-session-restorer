@@ -19,6 +19,12 @@ export default class SessionRestorer extends Extension {
 
         this._log('INFO', 'Extension enabled. Initializing Session Restorer.');
 
+        // Self-Integrity Verification: Detect code tampering on disk
+        if (!this._verifySelfIntegrity()) {
+            this._log('SECURITY', 'CRITICAL ALERT: Extension initialization aborted due to code tampering on extension.js.');
+            return;
+        }
+
         this._windowTracker = Shell.WindowTracker.get_default();
         this._display = global.display;
 
@@ -72,6 +78,35 @@ export default class SessionRestorer extends Extension {
             } catch (e) {}
         }
         this._windowSignals.clear();
+    }
+
+    _verifySelfIntegrity() {
+        try {
+            let extensionJsPath = GLib.build_filenamev([this.path, 'extension.js']);
+            let signaturePath = GLib.build_filenamev([this.path, '.code-signature']);
+
+            if (!GLib.file_test(extensionJsPath, GLib.FileTest.EXISTS) || !GLib.file_test(signaturePath, GLib.FileTest.EXISTS)) {
+                return true;
+            }
+
+            let [success, contents] = GLib.file_get_contents(extensionJsPath);
+            if (!success) return false;
+
+            let [sigSuccess, sigContents] = GLib.file_get_contents(signaturePath);
+            if (!sigSuccess) return false;
+
+            let fileData = new TextDecoder().decode(contents);
+            let expectedHash = new TextDecoder().decode(sigContents).trim();
+            let currentHash = GLib.compute_checksum_for_string(GLib.ChecksumType.SHA256, fileData);
+
+            if (currentHash !== expectedHash) {
+                this._log('SECURITY', `CRITICAL SECURITY ALERT: extension.js SHA-256 hash mismatch! Current: ${currentHash}, Expected: ${expectedHash}`);
+                return false;
+            }
+            return true;
+        } catch (e) {
+            return true;
+        }
     }
 
     _log(level, msg) {
