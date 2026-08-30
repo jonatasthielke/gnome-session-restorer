@@ -9,9 +9,11 @@ export default class SessionRestorer extends Extension {
         this._configDir = GLib.build_filenamev([GLib.get_user_config_dir(), 'gnome-session-restorer']);
         this._sessionFile = GLib.build_filenamev([this._configDir, 'session.json']);
         this._isShuttingDown = false;
-        this._trackedWindows = new Map();
+        this._windowSignals = new Map();
+        this._saveTimeoutId = 0;
 
-        GLib.mkdir_with_parents(this._configDir, 0o755);
+        // Ensure private user permissions (0700) for security
+        GLib.mkdir_with_parents(this._configDir, 0o700);
 
         this._windowTracker = Shell.WindowTracker.get_default();
         this._display = global.display;
@@ -21,7 +23,7 @@ export default class SessionRestorer extends Extension {
             this._onWindowCreated(window);
         });
 
-        // Listen for existing windows on startup
+        // Track existing windows on extension startup
         let workspaceManager = global.workspace_manager;
         let nWorkspaces = workspaceManager.n_workspaces;
         for (let i = 0; i < nWorkspaces; i++) {
@@ -40,6 +42,11 @@ export default class SessionRestorer extends Extension {
     }
 
     disable() {
+        if (this._saveTimeoutId) {
+            GLib.source_remove(this._saveTimeoutId);
+            this._saveTimeoutId = 0;
+        }
+
         if (this._windowCreatedId) {
             this._display.disconnect(this._windowCreatedId);
             this._windowCreatedId = 0;
@@ -50,7 +57,15 @@ export default class SessionRestorer extends Extension {
             this._shutdownSignalId = 0;
         }
 
-        this._trackedWindows.clear();
+        // Clean up connected window signals to prevent memory leaks
+        for (let [win, signals] of this._windowSignals.entries()) {
+            try {
+                for (let sigId of signals) {
+                    win.disconnect(sigId);
+                }
+            } catch (e) {}
+        }
+        this._windowSignals.clear();
     }
 
     _connectShutdownSignals() {
@@ -88,12 +103,19 @@ export default class SessionRestorer extends Extension {
         });
 
         let unmanageId = window.connect('unmanaging', () => {
-            window.disconnect(rectId);
-            window.disconnect(unmanageId);
+            if (this._windowSignals.has(window)) {
+                let signals = this._windowSignals.get(window);
+                for (let sigId of signals) {
+                    try { window.disconnect(sigId); } catch (e) {}
+                }
+                this._windowSignals.delete(window);
+            }
             if (!this._isShuttingDown) {
                 this._saveCurrentSessionDebounced();
             }
         });
+
+        this._windowSignals.set(window, [rectId, unmanageId]);
     }
 
     _saveCurrentSessionDebounced() {
@@ -117,7 +139,6 @@ export default class SessionRestorer extends Extension {
             let workspaceManager = global.workspace_manager;
             let nWorkspaces = workspaceManager.n_workspaces;
             let openApps = [];
-            let seenApps = new Set();
 
             for (let i = 0; i < nWorkspaces; i++) {
                 let ws = workspaceManager.get_workspace_by_index(i);
@@ -130,8 +151,7 @@ export default class SessionRestorer extends Extension {
                     if (!app) continue;
 
                     let appId = app.get_id(); // e.g. com.google.Chrome.desktop or antigravity.desktop
-                    if (!appId || seenApps.has(appId)) continue;
-                    seenApps.add(appId);
+                    if (!appId) continue;
 
                     let rect = win.get_frame_rect();
 
@@ -176,14 +196,17 @@ export default class SessionRestorer extends Extension {
             console.log('[Session Restorer] Restoring session with apps:', session.apps.length);
 
             let appSystem = Shell.AppSystem.get_default();
+            let launchedApps = new Set();
 
             session.apps.forEach(item => {
                 if (!item.app_id) return;
 
                 let app = appSystem.lookup_app(item.app_id);
                 if (app) {
-                    // Launch app natively
-                    app.launch(0, -1, Gio.AppLaunchContext.new());
+                    if (!launchedApps.has(item.app_id)) {
+                        launchedApps.add(item.app_id);
+                        app.launch(0, -1, Gio.AppLaunchContext.new());
+                    }
 
                     // Connect to new windows of this app to position them
                     let onWindowCreated = (display, win) => {
