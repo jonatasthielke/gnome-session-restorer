@@ -240,6 +240,11 @@ export default class SessionRestorer extends Extension {
     _onWindowCreated(window) {
         if (!window || window.skip_taskbar) return;
 
+        // Schedule debounced session save immediately whenever a new window is created
+        if (!this._isShuttingDown) {
+            this._saveCurrentSessionDebounced();
+        }
+
         let rectId = window.connect('notify::frame-rect', () => {
             if (!this._isShuttingDown) {
                 this._saveCurrentSessionDebounced();
@@ -459,7 +464,7 @@ export default class SessionRestorer extends Extension {
                 }
             });
         } catch (e) {
-            this._log('ERROR', `Error restoring session: ${e}`);
+            this._log('ERROR', `Error saving session: ${e}`);
         }
     }
 }
