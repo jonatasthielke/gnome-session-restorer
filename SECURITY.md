@@ -7,7 +7,7 @@ This document presents the complete security audit report and threat model verif
 - **Total Critical Vulnerabilities**: 0
 - **Total High Vulnerabilities**: 0
 - **Total Medium Vulnerabilities**: 0
-- **Total Low Vulnerabilities**: 0 (CSPRNG key derivation resolved)
+- **Total Low Vulnerabilities**: 0
 - **Security Audit Status**: **100% PASSED**
 
 ## Stack Detection & Mapping
@@ -47,10 +47,13 @@ This document presents the complete security audit report and threat model verif
 
 ---
 
-## Additional Security Features
+## Hardening Options for Enterprise Systems
 
-1. **Cryptographic HMAC-SHA256 Integrity Check**: Prevents unauthorized modifications to `session.json`.
-2. **Atomic Disk Persistence (`GLib.file_set_contents`)**: Ensures zero file corruption on unexpected power outages.
-3. **Shutdown Freeze Protection**: Locks session state immediately upon DBus `PrepareForShutdown` signal to avoid empty/partial session overwrites.
-4. **Memory Leak Prevention**: All GObject listeners (`notify::frame-rect`, `unmanaging`) are tracked and disconnected in `disable()`.
-5. **Log Rotation**: Persistent log file capped at 1 MB to prevent disk space exhaustion.
+For sysadmins or high-security deployments where immutable code locking is desired:
+
+```bash
+# Set Linux Kernel immutable attribute on extension code
+sudo chattr +i ~/.local/share/gnome-shell/extensions/session-restorer@thielke/extension.js
+```
+
+Note: Enabling `chattr +i` prevents modifications even by user-level package updates until `sudo chattr -i` is executed.
