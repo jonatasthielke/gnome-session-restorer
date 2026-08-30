@@ -12,25 +12,28 @@ A lightweight, high-performance, automatic session saving and window restoration
 
 ## Installation
 
-To install and enable this extension on GNOME Shell 45, 46, 47, 48, 49, or 50:
+### Option A: Direct Installation (No Git Required)
+Run this single command in your terminal to install the release package directly:
+```bash
+gnome-extensions install https://github.com/jonatasthielke/gnome-session-restorer/archive/refs/tags/v1.0.0.zip
+```
 
-### 1. Clone the repository into your GNOME extensions directory
+### Option B: Clone Repository
 ```bash
 mkdir -p ~/.local/share/gnome-shell/extensions
 git clone https://github.com/jonatasthielke/gnome-session-restorer.git ~/.local/share/gnome-shell/extensions/session-restorer@thielke
 ```
 
-### 2. Enable the extension
+### Enable & Verify
 ```bash
+# Enable extension
 gnome-extensions enable session-restorer@thielke
-```
 
-*Note: On Wayland, you must log out and log back in (or restart your desktop session) after installation so GNOME Shell loads the new extension into memory.*
-
-### 3. Verify status
-```bash
+# Verify installation
 gnome-extensions info session-restorer@thielke
 ```
+
+*Note: On Wayland, you must log out and log back in (or restart your desktop session) after installation so GNOME Shell loads the extension into memory.*
 
 ## Security & Privacy
 
