@@ -9,12 +9,15 @@ export default class SessionRestorer extends Extension {
         this._configDir = GLib.build_filenamev([GLib.get_user_config_dir(), 'gnome-session-restorer']);
         this._sessionFile = GLib.build_filenamev([this._configDir, 'session.json']);
         this._keyFile = GLib.build_filenamev([this._configDir, '.key']);
+        this._logFile = GLib.build_filenamev([this._configDir, 'session-restorer.log']);
         this._isShuttingDown = false;
         this._windowSignals = new Map();
         this._saveTimeoutId = 0;
 
         // Ensure private user permissions (0700) for security
         GLib.mkdir_with_parents(this._configDir, 0o700);
+
+        this._log('INFO', 'Extension enabled. Initializing Session Restorer.');
 
         this._windowTracker = Shell.WindowTracker.get_default();
         this._display = global.display;
@@ -43,6 +46,8 @@ export default class SessionRestorer extends Extension {
     }
 
     disable() {
+        this._log('INFO', 'Extension disabling. Cleaning up resources.');
+
         if (this._saveTimeoutId) {
             GLib.source_remove(this._saveTimeoutId);
             this._saveTimeoutId = 0;
@@ -69,6 +74,39 @@ export default class SessionRestorer extends Extension {
         this._windowSignals.clear();
     }
 
+    _log(level, msg) {
+        let timestamp = new Date().toISOString().replace('T', ' ').substring(0, 19);
+        let formattedMsg = `[${timestamp}] [${level}] ${msg}`;
+
+        if (level === 'ERROR' || level === 'SECURITY') {
+            console.error(`[Session Restorer] ${formattedMsg}`);
+        } else {
+            console.log(`[Session Restorer] ${formattedMsg}`);
+        }
+
+        try {
+            if (!this._logFile) return;
+
+            // Rotate log file if > 1 MB
+            if (GLib.file_test(this._logFile, GLib.FileTest.EXISTS)) {
+                let fileObj = Gio.File.new_for_path(this._logFile);
+                let info = fileObj.query_info('standard::size', Gio.FileQueryInfoFlags.NONE, null);
+                if (info && info.get_size() > 1024 * 1024) {
+                    GLib.file_set_contents(this._logFile, `${formattedMsg}\n[Log Rotated]\n`);
+                    return;
+                }
+            }
+
+            let file = Gio.File.new_for_path(this._logFile);
+            let stream = file.append_to_path(Gio.FileCreateFlags.NONE, null);
+            let encoder = new TextEncoder();
+            stream.write_all(encoder.encode(`${formattedMsg}\n`), null);
+            stream.close(null);
+        } catch (e) {
+            // Ignore persistent log writing errors
+        }
+    }
+
     _getSecretKey() {
         if (GLib.file_test(this._keyFile, GLib.FileTest.EXISTS)) {
             let [success, contents] = GLib.file_get_contents(this._keyFile);
@@ -79,6 +117,7 @@ export default class SessionRestorer extends Extension {
         let secretKey = GLib.compute_checksum_for_string(GLib.ChecksumType.SHA256, randomSeed);
         GLib.file_set_contents(this._keyFile, secretKey);
         GLib.chmod(this._keyFile, 0o600);
+        this._log('INFO', 'Generated new HMAC secret key file.');
         return secretKey;
     }
 
@@ -101,14 +140,15 @@ export default class SessionRestorer extends Extension {
                     this._sessionProxy.init_finish(res);
                     this._shutdownSignalId = this._sessionProxy.connectSignal('PrepareForShutdown', () => {
                         this._isShuttingDown = true;
-                        console.log('[Session Restorer] PrepareForShutdown signal received. Session state frozen.');
+                        this._log('INFO', 'PrepareForShutdown DBus signal received. Session state frozen.');
                     });
+                    this._log('INFO', 'Connected to org.gnome.SessionManager PrepareForShutdown signal.');
                 } catch (e) {
-                    console.error('[Session Restorer] Failed to connect DBus shutdown signal:', e);
+                    this._log('ERROR', `Failed to init DBus shutdown proxy: ${e}`);
                 }
             });
         } catch (e) {
-            console.error('[Session Restorer] DBus setup error:', e);
+            this._log('ERROR', `DBus setup error: ${e}`);
         }
     }
 
@@ -150,7 +190,7 @@ export default class SessionRestorer extends Extension {
 
     _saveCurrentSession() {
         if (this._isShuttingDown) {
-            console.log('[Session Restorer] Shutdown in progress. Preserving last complete session on disk.');
+            this._log('DEBUG', 'Shutdown in progress. Preserving last complete session on disk.');
             return;
         }
 
@@ -169,7 +209,7 @@ export default class SessionRestorer extends Extension {
                     let app = this._windowTracker.get_window_app(win);
                     if (!app) continue;
 
-                    let appId = app.get_id(); // e.g. com.google.Chrome.desktop or antigravity.desktop
+                    let appId = app.get_id();
                     if (!appId) continue;
 
                     let rect = win.get_frame_rect();
@@ -188,7 +228,7 @@ export default class SessionRestorer extends Extension {
 
             // Protective Guard: Never overwrite session with an empty list if shutting down or if windows were already closed by OS!
             if (openApps.length === 0) {
-                console.log('[Session Restorer] Skipping overwrite: openApps list is empty.');
+                this._log('DEBUG', 'Skipping overwrite: openApps list is empty.');
                 return;
             }
 
@@ -198,24 +238,28 @@ export default class SessionRestorer extends Extension {
 
             let data = JSON.stringify({ ...payloadObj, signature }, null, 2);
             GLib.file_set_contents(this._sessionFile, data);
-            console.log('[Session Restorer] Saved open session apps with signature verification:', openApps.length);
+            this._log('INFO', `Saved session state successfully (${openApps.length} apps).`);
         } catch (e) {
-            console.error('[Session Restorer] Error saving session:', e);
+            this._log('ERROR', `Error saving session: ${e}`);
         }
     }
 
     _restoreSession() {
         try {
             if (!GLib.file_test(this._sessionFile, GLib.FileTest.EXISTS)) {
+                this._log('INFO', 'No previous session.json file found to restore.');
                 return;
             }
 
             let [success, contents] = GLib.file_get_contents(this._sessionFile);
-            if (!success) return;
+            if (!success) {
+                this._log('ERROR', 'Failed to read session.json file contents.');
+                return;
+            }
 
             let session = JSON.parse(new TextDecoder().decode(contents));
             if (!session || !session.apps || session.apps.length === 0 || !session.signature) {
-                console.warn('[Session Restorer] Invalid session file structure or missing signature.');
+                this._log('WARN', 'Invalid session file structure or missing HMAC signature.');
                 return;
             }
 
@@ -225,11 +269,11 @@ export default class SessionRestorer extends Extension {
             let expectedSignature = this._computeHMAC(payloadStr);
 
             if (signature !== expectedSignature) {
-                console.error('[Session Restorer] SECURITY WARNING: Session file signature mismatch! Tampering detected. Session discarded.');
+                this._log('SECURITY', 'SECURITY WARNING: HMAC signature mismatch! Tampering detected. Session discarded.');
                 return;
             }
 
-            console.log('[Session Restorer] Session signature verified successfully. Restoring apps:', session.apps.length);
+            this._log('INFO', `Session signature verified successfully. Restoring ${session.apps.length} apps.`);
 
             let appSystem = Shell.AppSystem.get_default();
             let launchedApps = new Set();
@@ -241,6 +285,7 @@ export default class SessionRestorer extends Extension {
                 if (app) {
                     if (!launchedApps.has(item.app_id)) {
                         launchedApps.add(item.app_id);
+                        this._log('INFO', `Launching application: ${item.app_id}`);
                         app.launch(0, -1, Gio.AppLaunchContext.new());
                     }
 
@@ -251,6 +296,7 @@ export default class SessionRestorer extends Extension {
                             GLib.timeout_add(GLib.PRIORITY_DEFAULT, 300, () => {
                                 try {
                                     if (win && win.get_workspace) {
+                                        this._log('INFO', `Restoring window position for ${item.app_id}: (${item.x}, ${item.y}) ${item.width}x${item.height}`);
                                         win.move_resize_frame(false, item.x, item.y, item.width, item.height);
                                     }
                                 } catch (err) {}
@@ -264,10 +310,12 @@ export default class SessionRestorer extends Extension {
                         this._display.disconnect(signalId);
                         return GLib.SOURCE_REMOVE;
                     });
+                } else {
+                    this._log('WARN', `Could not find desktop app for ID: ${item.app_id}`);
                 }
             });
         } catch (e) {
-            console.error('[Session Restorer] Error restoring session:', e);
+            this._log('ERROR', `Error restoring session: ${e}`);
         }
     }
 }
