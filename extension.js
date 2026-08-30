@@ -9,6 +9,8 @@ export default class SessionRestorer extends Extension {
         this._sessionFile = GLib.build_filenamev([this._configDir, 'session.json']);
         this._keyFile = GLib.build_filenamev([this._configDir, '.key']);
         this._logFile = GLib.build_filenamev([this._configDir, 'session-restorer.log']);
+        // Marker file: prevents re-launching apps on screen lock/unlock cycles
+        this._restoredMarkerFile = GLib.build_filenamev([this._configDir, '.session-restored']);
         this._isShuttingDown = false;
         this._windowSignals = new Map();
         this._saveTimeoutId = 0;
@@ -236,7 +238,12 @@ export default class SessionRestorer extends Extension {
                     this._sessionProxy.init_finish(res);
                     this._shutdownSignalId = this._sessionProxy.connectSignal('PrepareForShutdown', () => {
                         this._isShuttingDown = true;
-                        this._log('INFO', 'PrepareForShutdown DBus signal received. Session state frozen.');
+                        // Delete restored marker so the next login triggers a fresh restore
+                        try {
+                            let markerFile = Gio.File.new_for_path(this._restoredMarkerFile);
+                            if (markerFile.query_exists(null)) markerFile.delete(null);
+                        } catch (e) {}
+                        this._log('INFO', 'PrepareForShutdown received. Session frozen. Restored marker cleared.');
                     });
                     this._log('INFO', 'Connected to org.gnome.SessionManager PrepareForShutdown signal.');
                 } catch (e) {
@@ -411,6 +418,12 @@ export default class SessionRestorer extends Extension {
 
     _restoreSession() {
         try {
+            // Guard: skip restore on screen lock/unlock (GNOME calls disable/enable on lock)
+            if (GLib.file_test(this._restoredMarkerFile, GLib.FileTest.EXISTS)) {
+                this._log('INFO', 'Session already restored this login. Skipping (lock/unlock cycle).');
+                return;
+            }
+
             if (!GLib.file_test(this._sessionFile, GLib.FileTest.EXISTS)) {
                 this._log('INFO', 'No previous session.json file found to restore.');
                 return;
@@ -550,6 +563,10 @@ export default class SessionRestorer extends Extension {
                     this._log('WARN', `Could not find desktop app for ID: ${item.app_id}`);
                 }
             });
+
+            // Write marker: signals that restore already ran for this login session
+            GLib.file_set_contents(this._restoredMarkerFile, '');
+            GLib.chmod(this._restoredMarkerFile, 0o600);
         } catch (e) {
             this._log('ERROR', `Error restoring session: ${e}`);
         }
