@@ -2,6 +2,7 @@
   "name": "Session Restorer",
   "description": "Lightweight, automatic session saving and window restoration extension for GNOME 50 Wayland.",
   "uuid": "session-restorer@thielke",
+  "settings-schema": "org.gnome.shell.extensions.session-restorer",
   "shell-version": [
     "45",
     "46",

@@ -1,4 +1,3 @@
-import Meta from 'gi://Meta';
 import Shell from 'gi://Shell';
 import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
@@ -27,8 +26,20 @@ export default class SessionRestorer extends Extension {
             return;
         }
 
-        // Load settings
-        this._settings = this.getSettings();
+        // Load GSettings directly from the extension schemas/ dir — avoids depending on metadata.json cache
+        try {
+            let schemaDir = Gio.File.new_for_path(GLib.build_filenamev([this.path, 'schemas']));
+            let schemaSource = Gio.SettingsSchemaSource.new_from_directory(
+                schemaDir.get_path(),
+                Gio.SettingsSchemaSource.get_default(),
+                false
+            );
+            let schema = schemaSource.lookup('org.gnome.shell.extensions.session-restorer', true);
+            this._settings = schema ? new Gio.Settings({ settings_schema: schema }) : null;
+        } catch (e) {
+            this._log('WARN', `Could not load GSettings schema: ${e}. Using defaults.`);
+            this._settings = null;
+        }
 
         this._windowTracker = Shell.WindowTracker.get_default();
         this._appSystem = Shell.AppSystem.get_default();
@@ -266,11 +277,15 @@ export default class SessionRestorer extends Extension {
             let lowerWm = wmClass.toLowerCase();
             let allApps = this._appSystem.get_installed ? this._appSystem.get_installed() : [];
             for (let installedApp of allApps) {
-                let id = installedApp.get_id() ? installedApp.get_id().toLowerCase() : '';
-                let name = installedApp.get_name() ? installedApp.get_name().toLowerCase() : '';
-                if (id.includes(lowerWm) || (lowerWm.length > 2 && name.includes(lowerWm))) {
-                    return installedApp.get_id();
-                }
+                try {
+                    let appId = installedApp.get_id();
+                    let appName = installedApp.get_name();
+                    let id = appId ? appId.toLowerCase() : '';
+                    let name = appName ? appName.toLowerCase() : '';
+                    if (id.includes(lowerWm) || (lowerWm.length > 2 && name && name.includes(lowerWm))) {
+                        return appId;
+                    }
+                } catch (e) {}
             }
         }
 
@@ -474,7 +489,7 @@ export default class SessionRestorer extends Extension {
                                 win.move_resize_frame(false, targetItem.x, targetItem.y, targetItem.width, targetItem.height);
 
                                 if (targetItem.is_maximized && win.maximize) {
-                                    win.maximize(Meta.MaximizeFlags.BOTH);
+                                    win.maximize();
                                 }
 
                                 if (win.raise) {
