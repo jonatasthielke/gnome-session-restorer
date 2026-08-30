@@ -217,11 +217,12 @@ export default class SessionRestorer extends Extension {
                     openApps.push({
                         app_id: appId,
                         workspace: i,
+                        monitor: win.get_monitor ? win.get_monitor() : 0,
                         x: rect.x,
                         y: rect.y,
                         width: rect.width,
                         height: rect.height,
-                        is_maximized: win.is_maximized(),
+                        is_maximized: win.is_maximized ? win.is_maximized() : false,
                     });
                 }
             }
@@ -298,6 +299,10 @@ export default class SessionRestorer extends Extension {
                                     if (win && win.get_workspace) {
                                         this._log('INFO', `Restoring window position for ${item.app_id}: (${item.x}, ${item.y}) ${item.width}x${item.height}`);
                                         win.move_resize_frame(false, item.x, item.y, item.width, item.height);
+
+                                        if (item.is_maximized && win.maximize) {
+                                            win.maximize(Meta.MaximizeFlags.BOTH);
+                                        }
                                     }
                                 } catch (err) {}
                                 return GLib.SOURCE_REMOVE;
