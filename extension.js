@@ -285,15 +285,34 @@ export default class SessionRestorer extends Extension {
             let appSystem = Shell.AppSystem.get_default();
             let launchedApps = new Set();
 
+            // Staggered launch queue: launch apps with 400ms delay between each app to prevent boot CPU/RAM I/O storms
+            let delayOffset = 0;
+
             session.apps.forEach((item, index) => {
-                if (!item.app_id) return;
+                if (!item.app_id || typeof item.app_id !== 'string') return;
+
+                // Security Check: Sanitize app_id against directory traversal or suspicious paths
+                if (item.app_id.includes('/') || item.app_id.includes('..') || !item.app_id.endsWith('.desktop')) {
+                    this._log('SECURITY', `SECURITY WARNING: Invalid or suspicious app_id rejected: ${item.app_id}`);
+                    return;
+                }
 
                 let app = appSystem.lookup_app(item.app_id);
                 if (app) {
                     if (!launchedApps.has(item.app_id)) {
                         launchedApps.add(item.app_id);
-                        this._log('INFO', `Launching application: ${item.app_id}`);
-                        app.launch(0, -1, Gio.AppLaunchContext.new());
+
+                        GLib.timeout_add(GLib.PRIORITY_DEFAULT, delayOffset, () => {
+                            try {
+                                this._log('INFO', `Staggered launching application: ${item.app_id}`);
+                                app.launch(0, -1, Gio.AppLaunchContext.new());
+                            } catch (err) {
+                                this._log('ERROR', `Failed to launch ${item.app_id}: ${err}`);
+                            }
+                            return GLib.SOURCE_REMOVE;
+                        });
+
+                        delayOffset += 400; // 400ms stagger interval per app
                     }
 
                     // Connect to new windows of this app to position them and raise them in stack order
@@ -322,7 +341,7 @@ export default class SessionRestorer extends Extension {
                     };
 
                     let signalId = this._display.connect('window-created', onWindowCreated);
-                    GLib.timeout_add(GLib.PRIORITY_DEFAULT, 5000, () => {
+                    GLib.timeout_add(GLib.PRIORITY_DEFAULT, 7000, () => {
                         this._display.disconnect(signalId);
                         return GLib.SOURCE_REMOVE;
                     });
