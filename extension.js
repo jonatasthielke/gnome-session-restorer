@@ -26,6 +26,7 @@ export default class SessionRestorer extends Extension {
         }
 
         this._windowTracker = Shell.WindowTracker.get_default();
+        this._appSystem = Shell.AppSystem.get_default();
         this._display = global.display;
 
         // Listen for window creation to track open apps
@@ -46,6 +47,9 @@ export default class SessionRestorer extends Extension {
 
         // Listen for session shutdown signals via DBus
         this._connectShutdownSignals();
+
+        // Save current initial open window state immediately
+        this._saveCurrentSessionDebounced();
 
         // Restore previously saved session on login
         this._restoreSession();
@@ -188,6 +192,33 @@ export default class SessionRestorer extends Extension {
         }
     }
 
+    _resolveAppForWindow(win) {
+        if (!win) return null;
+
+        let app = this._windowTracker.get_window_app(win);
+        if (app && app.get_id()) return app.get_id();
+
+        let wmClass = win.get_wm_class ? win.get_wm_class() : null;
+        if (wmClass) {
+            let matchedApp = this._appSystem.lookup_app_by_wmclass(wmClass);
+            if (matchedApp && matchedApp.get_id()) return matchedApp.get_id();
+        }
+
+        let wmInstance = win.get_wm_class_instance ? win.get_wm_class_instance() : null;
+        if (wmInstance) {
+            let matchedApp = this._appSystem.lookup_app_by_wmclass(wmInstance);
+            if (matchedApp && matchedApp.get_id()) return matchedApp.get_id();
+        }
+
+        let gtkId = win.get_gtk_application_id ? win.get_gtk_application_id() : null;
+        if (gtkId) {
+            let matchedApp = this._appSystem.lookup_app(`${gtkId}.desktop`);
+            if (matchedApp && matchedApp.get_id()) return matchedApp.get_id();
+        }
+
+        return null;
+    }
+
     _onWindowCreated(window) {
         if (!window || window.skip_taskbar) return;
 
@@ -243,10 +274,7 @@ export default class SessionRestorer extends Extension {
                 for (let win of windows) {
                     if (!win || win.skip_taskbar) continue;
 
-                    let app = this._windowTracker.get_window_app(win);
-                    if (!app) continue;
-
-                    let appId = app.get_id();
+                    let appId = this._resolveAppForWindow(win);
                     if (!appId) continue;
 
                     let rect = win.get_frame_rect();
@@ -317,7 +345,6 @@ export default class SessionRestorer extends Extension {
 
             this._log('INFO', `Session signature verified successfully. Restoring ${session.apps.length} apps in Z-index stack order.`);
 
-            let appSystem = Shell.AppSystem.get_default();
             let launchedApps = new Set();
 
             // Staggered launch queue: launch apps with 400ms delay between each app to prevent boot CPU/RAM I/O storms
@@ -332,7 +359,7 @@ export default class SessionRestorer extends Extension {
                     return;
                 }
 
-                let app = appSystem.lookup_app(item.app_id);
+                let app = this._appSystem.lookup_app(item.app_id);
                 if (app) {
                     if (!launchedApps.has(item.app_id)) {
                         launchedApps.add(item.app_id);
@@ -352,8 +379,13 @@ export default class SessionRestorer extends Extension {
 
                     // Connect to new windows of this app to position them and raise them in stack order
                     let onWindowCreated = (display, win) => {
-                        let winApp = this._windowTracker.get_window_app(win);
-                        if (winApp && winApp.get_id() === item.app_id) {
+                        let winAppId = this._resolveAppForWindow(win);
+                        let wmClass = win.get_wm_class ? win.get_wm_class() : null;
+
+                        let isMatch = (winAppId && winAppId === item.app_id) || 
+                                      (wmClass && item.app_id.toLowerCase().includes(wmClass.toLowerCase()));
+
+                        if (isMatch) {
                             GLib.timeout_add(GLib.PRIORITY_DEFAULT, 300 + (index * 50), () => {
                                 try {
                                     if (win && win.get_workspace) {
