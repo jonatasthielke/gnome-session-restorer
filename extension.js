@@ -221,6 +221,19 @@ export default class SessionRestorer extends Extension {
             if (matchedApp && matchedApp.get_id()) return matchedApp.get_id();
         }
 
+        // Deep Search Fallback for Flatpaks with non-standard WM_CLASS (e.g. obs -> com.obsproject.Studio.desktop)
+        if (wmClass) {
+            let lowerWm = wmClass.toLowerCase();
+            let allApps = this._appSystem.get_installed ? this._appSystem.get_installed() : [];
+            for (let installedApp of allApps) {
+                let id = installedApp.get_id() ? installedApp.get_id().toLowerCase() : '';
+                let name = installedApp.get_name() ? installedApp.get_name().toLowerCase() : '';
+                if (id.includes(lowerWm) || (lowerWm.length > 2 && name.includes(lowerWm))) {
+                    return installedApp.get_id();
+                }
+            }
+        }
+
         return null;
     }
 
@@ -365,7 +378,8 @@ export default class SessionRestorer extends Extension {
                 let targetItem = session.apps.find(item => {
                     if (item._matched) return false;
                     let isMatch = (winAppId && winAppId === item.app_id) || 
-                                  (wmClass && item.app_id.toLowerCase().includes(wmClass.toLowerCase()));
+                                  (wmClass && item.app_id.toLowerCase().includes(wmClass.toLowerCase())) ||
+                                  (wmClass && wmClass.toLowerCase().includes(item.app_id.toLowerCase().replace('.desktop', '')));
                     return isMatch;
                 });
 
