@@ -202,6 +202,7 @@ export default class SessionRestorer extends Extension {
             for (let i = 0; i < nWorkspaces; i++) {
                 let ws = workspaceManager.get_workspace_by_index(i);
                 let windows = ws.list_windows();
+                let stackIndex = 0;
 
                 for (let win of windows) {
                     if (!win || win.skip_taskbar) continue;
@@ -217,6 +218,7 @@ export default class SessionRestorer extends Extension {
                     openApps.push({
                         app_id: appId,
                         workspace: i,
+                        stack_index: stackIndex++,
                         monitor: win.get_monitor ? win.get_monitor() : 0,
                         x: rect.x,
                         y: rect.y,
@@ -239,7 +241,7 @@ export default class SessionRestorer extends Extension {
 
             let data = JSON.stringify({ ...payloadObj, signature }, null, 2);
             GLib.file_set_contents(this._sessionFile, data);
-            this._log('INFO', `Saved session state successfully (${openApps.length} apps).`);
+            this._log('INFO', `Saved session state successfully (${openApps.length} apps with stack Z-index).`);
         } catch (e) {
             this._log('ERROR', `Error saving session: ${e}`);
         }
@@ -274,12 +276,15 @@ export default class SessionRestorer extends Extension {
                 return;
             }
 
-            this._log('INFO', `Session signature verified successfully. Restoring ${session.apps.length} apps.`);
+            // Sort apps by workspace and Z-index stack order so windows open from back to front
+            session.apps.sort((a, b) => (a.stack_index || 0) - (b.stack_index || 0));
+
+            this._log('INFO', `Session signature verified successfully. Restoring ${session.apps.length} apps in Z-index stack order.`);
 
             let appSystem = Shell.AppSystem.get_default();
             let launchedApps = new Set();
 
-            session.apps.forEach(item => {
+            session.apps.forEach((item, index) => {
                 if (!item.app_id) return;
 
                 let app = appSystem.lookup_app(item.app_id);
@@ -290,18 +295,23 @@ export default class SessionRestorer extends Extension {
                         app.launch(0, -1, Gio.AppLaunchContext.new());
                     }
 
-                    // Connect to new windows of this app to position them
+                    // Connect to new windows of this app to position them and raise them in stack order
                     let onWindowCreated = (display, win) => {
                         let winApp = this._windowTracker.get_window_app(win);
                         if (winApp && winApp.get_id() === item.app_id) {
-                            GLib.timeout_add(GLib.PRIORITY_DEFAULT, 300, () => {
+                            GLib.timeout_add(GLib.PRIORITY_DEFAULT, 300 + (index * 50), () => {
                                 try {
                                     if (win && win.get_workspace) {
-                                        this._log('INFO', `Restoring window position for ${item.app_id}: (${item.x}, ${item.y}) ${item.width}x${item.height}`);
+                                        this._log('INFO', `Restoring window position for ${item.app_id} [Stack Z-index ${item.stack_index || 0}]: (${item.x}, ${item.y}) ${item.width}x${item.height}`);
                                         win.move_resize_frame(false, item.x, item.y, item.width, item.height);
 
                                         if (item.is_maximized && win.maximize) {
                                             win.maximize(Meta.MaximizeFlags.BOTH);
+                                        }
+
+                                        // Raise window to enforce Z-index stack order
+                                        if (win.raise) {
+                                            win.raise();
                                         }
                                     }
                                 } catch (err) {}
