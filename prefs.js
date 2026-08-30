@@ -1,44 +1,45 @@
 import Adw from 'gi://Adw';
-import Gio from 'gi://Gio';
 import Gtk from 'gi://Gtk';
 import {ExtensionPreferences, gettext as _} from 'resource:///org/gnome/Shell/Extensions/js/extensions/prefs.js';
 
 export default class SessionRestorerPreferences extends ExtensionPreferences {
     fillPreferencesWindow(window) {
+        const settings = this.getSettings();
         const page = new Adw.PreferencesPage();
-        
+
         // General Settings Group
         const group = new Adw.PreferencesGroup({
             title: _('General Settings'),
-            description: _('Configure session saving and restoration behavior')
+            description: _('Configure session saving and restoration behavior'),
         });
         page.add(group);
 
-        // Debounce Delay Setting
+        // Bug 4 fix: Debounce Delay — bound to GSettings key 'debounce-delay'
         const debounceRow = new Adw.SpinRow({
             title: _('Save Debounce Delay (seconds)'),
-            subtitle: _('Time to wait after window movement before writing session state to disk'),
+            subtitle: _('Time to wait after a window event before saving session state to disk'),
             adjustment: new Gtk.Adjustment({
-                value: 1,
+                value: settings.get_int('debounce-delay'),
                 lower: 1,
                 upper: 10,
                 step_increment: 1,
             }),
         });
+        settings.bind('debounce-delay', debounceRow, 'value', 0);
         group.add(debounceRow);
 
-        // HMAC Security Verification Setting
+        // Bug 4 fix: HMAC toggle — bound to GSettings key 'hmac-enabled'
         const hmacRow = new Adw.SwitchRow({
             title: _('HMAC-SHA256 Integrity Protection'),
-            subtitle: _('Cryptographically verify session file signature with secret key before launch'),
-            active: true,
+            subtitle: _('Cryptographically verify session file signature before restoring apps on login'),
         });
+        settings.bind('hmac-enabled', hmacRow, 'active', 0);
         group.add(hmacRow);
 
         // Security & Storage Group
         const storageGroup = new Adw.PreferencesGroup({
             title: _('Security & Privacy Specs'),
-            description: _('Directory permissions and cryptographic verification')
+            description: _('Directory permissions and cryptographic verification'),
         });
         page.add(storageGroup);
 
@@ -57,7 +58,7 @@ export default class SessionRestorerPreferences extends ExtensionPreferences {
         // Logs & Troubleshooting Group
         const logsGroup = new Adw.PreferencesGroup({
             title: _('Logs & Diagnostics'),
-            description: _('Persistent rotating log file location')
+            description: _('Persistent rotating log file location'),
         });
         page.add(logsGroup);
 

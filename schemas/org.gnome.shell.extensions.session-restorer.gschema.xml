@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist>
+  <schema id="org.gnome.shell.extensions.session-restorer"
+          path="/org/gnome/shell/extensions/session-restorer/">
+    <key name="debounce-delay" type="i">
+      <default>1</default>
+      <summary>Save debounce delay in seconds</summary>
+      <description>Time to wait after a window event before writing session state to disk (1–10 seconds).</description>
+    </key>
+    <key name="hmac-enabled" type="b">
+      <default>true</default>
+      <summary>Enable HMAC-SHA256 integrity protection</summary>
+      <description>Cryptographically verify session file signature before restoring apps on login.</description>
+    </key>
+  </schema>
+</schemalist>

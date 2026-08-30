@@ -13,6 +13,8 @@ export default class SessionRestorer extends Extension {
         this._isShuttingDown = false;
         this._windowSignals = new Map();
         this._saveTimeoutId = 0;
+        // Bug 3 fix: track restore timeouts so disable() can cancel them
+        this._restoreTimeoutIds = [];
 
         // Ensure private user permissions (0700) for security
         GLib.mkdir_with_parents(this._configDir, 0o700);
@@ -24,6 +26,9 @@ export default class SessionRestorer extends Extension {
             this._log('SECURITY', 'CRITICAL ALERT: Extension initialization aborted due to code tampering on extension.js.');
             return;
         }
+
+        // Load settings
+        this._settings = this.getSettings();
 
         this._windowTracker = Shell.WindowTracker.get_default();
         this._appSystem = Shell.AppSystem.get_default();
@@ -71,6 +76,12 @@ export default class SessionRestorer extends Extension {
             this._saveTimeoutId = 0;
         }
 
+        // Bug 3 fix: cancel any in-flight restore timeouts
+        for (let tid of this._restoreTimeoutIds) {
+            try { GLib.source_remove(tid); } catch (e) {}
+        }
+        this._restoreTimeoutIds = [];
+
         if (this._windowCreatedId) {
             this._display.disconnect(this._windowCreatedId);
             this._windowCreatedId = 0;
@@ -105,6 +116,7 @@ export default class SessionRestorer extends Extension {
             } catch (e) {}
         }
         this._windowSignals.clear();
+        this._settings = null;
     }
 
     _verifySelfIntegrity() {
@@ -117,10 +129,17 @@ export default class SessionRestorer extends Extension {
             }
 
             let [success, contents] = GLib.file_get_contents(extensionJsPath);
-            if (!success) return false;
+            if (!success) {
+                // Bug 5 fix: log and fail explicitly instead of silently returning true
+                this._log('SECURITY', 'Could not read extension.js for integrity check — aborting.');
+                return false;
+            }
 
             let [sigSuccess, sigContents] = GLib.file_get_contents(signaturePath);
-            if (!sigSuccess) return false;
+            if (!sigSuccess) {
+                this._log('SECURITY', 'Could not read .code-signature for integrity check — aborting.');
+                return false;
+            }
 
             let fileData = new TextDecoder().decode(contents);
             let expectedHash = new TextDecoder().decode(sigContents).trim();
@@ -132,7 +151,9 @@ export default class SessionRestorer extends Extension {
             }
             return true;
         } catch (e) {
-            return true;
+            // Bug 5 fix: log the actual exception instead of silently ignoring it
+            this._log('SECURITY', `Exception during integrity check: ${e} — aborting for safety.`);
+            return false;
         }
     }
 
@@ -159,13 +180,14 @@ export default class SessionRestorer extends Extension {
                 }
             }
 
+            // Bug 1 fix: append_to() is the correct Gio.File API, not append_to_path()
             let file = Gio.File.new_for_path(this._logFile);
-            let stream = file.append_to_path(Gio.FileCreateFlags.NONE, null);
+            let stream = file.append_to(Gio.FileCreateFlags.NONE, null);
             let encoder = new TextEncoder();
             stream.write_all(encoder.encode(`${formattedMsg}\n`), null);
             stream.close(null);
         } catch (e) {
-            // Ignore persistent log writing errors
+            // Ignore persistent log writing errors to avoid infinite recursion
         }
     }
 
@@ -307,7 +329,9 @@ export default class SessionRestorer extends Extension {
         if (this._saveTimeoutId) {
             GLib.source_remove(this._saveTimeoutId);
         }
-        this._saveTimeoutId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 1000, () => {
+        // Use GSettings debounce delay if settings are loaded, otherwise default to 1000ms
+        let delayMs = this._settings ? this._settings.get_int('debounce-delay') * 1000 : 1000;
+        this._saveTimeoutId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, delayMs, () => {
             this._saveTimeoutId = 0;
             this._saveCurrentSession();
             return GLib.SOURCE_REMOVE;
@@ -352,7 +376,7 @@ export default class SessionRestorer extends Extension {
                 }
             }
 
-            // Protective Guard: Never overwrite session with an empty list if shutting down or if windows were already closed by OS!
+            // Protective Guard: Never overwrite session with an empty list
             if (openApps.length === 0) {
                 this._log('DEBUG', 'Skipping overwrite: openApps list is empty.');
                 return;
@@ -389,14 +413,19 @@ export default class SessionRestorer extends Extension {
                 return;
             }
 
-            // Cryptographic HMAC Integrity Check
-            let { signature, ...payloadObj } = session;
-            let payloadStr = JSON.stringify(payloadObj);
-            let expectedSignature = this._computeHMAC(payloadStr);
+            // Bug 4 fix: read hmac-enabled from GSettings
+            let hmacEnabled = this._settings ? this._settings.get_boolean('hmac-enabled') : true;
 
-            if (signature !== expectedSignature) {
-                this._log('SECURITY', 'SECURITY WARNING: HMAC signature mismatch! Tampering detected. Session discarded.');
-                return;
+            if (hmacEnabled) {
+                // Cryptographic HMAC Integrity Check
+                let { signature, ...payloadObj } = session;
+                let payloadStr = JSON.stringify(payloadObj);
+                let expectedSignature = this._computeHMAC(payloadStr);
+
+                if (signature !== expectedSignature) {
+                    this._log('SECURITY', 'SECURITY WARNING: HMAC signature mismatch! Tampering detected. Session discarded.');
+                    return;
+                }
             }
 
             // Sort apps by workspace and Z-index stack order so windows open from back to front
@@ -404,7 +433,6 @@ export default class SessionRestorer extends Extension {
 
             this._log('INFO', `Session signature verified successfully. Restoring ${session.apps.length} apps in Z-index stack order.`);
 
-            let launchedApps = new Set();
             let matchedWindows = new Set();
             let workspaceManager = global.workspace_manager;
 
@@ -418,7 +446,7 @@ export default class SessionRestorer extends Extension {
                 // Find the first unmatched stored item that corresponds to this newly created window
                 let targetItem = session.apps.find(item => {
                     if (item._matched) return false;
-                    let isMatch = (winAppId && winAppId === item.app_id) || 
+                    let isMatch = (winAppId && winAppId === item.app_id) ||
                                   (wmClass && item.app_id.toLowerCase().includes(wmClass.toLowerCase())) ||
                                   (wmClass && wmClass.toLowerCase().includes(item.app_id.toLowerCase().replace('.desktop', '')));
                     return isMatch;
@@ -428,11 +456,13 @@ export default class SessionRestorer extends Extension {
                     targetItem._matched = true;
                     matchedWindows.add(win);
 
-                    GLib.timeout_add(GLib.PRIORITY_DEFAULT, 300, () => {
+                    // Bug 3 fix: track timeout ID so disable() can cancel it
+                    let positionTid = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 300, () => {
+                        this._restoreTimeoutIds = this._restoreTimeoutIds.filter(id => id !== positionTid);
                         try {
                             if (win && win.get_workspace) {
                                 this._log('INFO', `Restoring window position for ${targetItem.app_id} [Stack Z-index ${targetItem.stack_index || 0}]: (${targetItem.x}, ${targetItem.y}) ${targetItem.width}x${targetItem.height}`);
-                                
+
                                 // Restore workspace assignment
                                 if (targetItem.workspace !== undefined && workspaceManager) {
                                     let ws = workspaceManager.get_workspace_by_index(targetItem.workspace);
@@ -454,19 +484,24 @@ export default class SessionRestorer extends Extension {
                         } catch (err) {}
                         return GLib.SOURCE_REMOVE;
                     });
+                    this._restoreTimeoutIds.push(positionTid);
                 }
             });
 
-            // Disconnect global restore listener after 15 seconds
-            GLib.timeout_add(GLib.PRIORITY_DEFAULT, 15000, () => {
+            // Bug 3 fix: track the 15-second cleanup timeout
+            let cleanupTid = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 15000, () => {
+                this._restoreTimeoutIds = this._restoreTimeoutIds.filter(id => id !== cleanupTid);
                 if (this._globalRestoreSignalId) {
                     this._display.disconnect(this._globalRestoreSignalId);
                     this._globalRestoreSignalId = 0;
                 }
                 return GLib.SOURCE_REMOVE;
             });
+            this._restoreTimeoutIds.push(cleanupTid);
 
-            // Staggered launch queue: launch apps with 400ms delay between each app to prevent boot CPU/RAM I/O storms
+            // Bug 2 fix: track launched apps by (app_id + window_index within same app_id) to allow
+            // multiple windows of the same app (e.g., two Vivaldi windows)
+            let appLaunchCounts = new Map();
             let delayOffset = 0;
 
             session.apps.forEach((item) => {
@@ -480,21 +515,30 @@ export default class SessionRestorer extends Extension {
 
                 let app = this._appSystem.lookup_app(item.app_id);
                 if (app) {
-                    if (!launchedApps.has(item.app_id)) {
-                        launchedApps.add(item.app_id);
+                    // Bug 2 fix: count how many windows of this app_id are in the session and launch each one
+                    let currentCount = appLaunchCounts.get(item.app_id) || 0;
+                    appLaunchCounts.set(item.app_id, currentCount + 1);
 
-                        GLib.timeout_add(GLib.PRIORITY_DEFAULT, delayOffset, () => {
-                            try {
+                    // Launch: first window launches the app; subsequent windows open new windows
+                    let launchTid = GLib.timeout_add(GLib.PRIORITY_DEFAULT, delayOffset, () => {
+                        this._restoreTimeoutIds = this._restoreTimeoutIds.filter(id => id !== launchTid);
+                        try {
+                            if (currentCount === 0) {
+                                // First window: launch the application normally
                                 this._log('INFO', `Staggered launching application: ${item.app_id}`);
                                 app.launch(0, -1, Gio.AppLaunchContext.new());
-                            } catch (err) {
-                                this._log('ERROR', `Failed to launch ${item.app_id}: ${err}`);
+                            } else {
+                                // Subsequent windows: open a new window in the already-running app
+                                this._log('INFO', `Opening additional window (${currentCount + 1}) for: ${item.app_id}`);
+                                app.open_new_window(-1);
                             }
-                            return GLib.SOURCE_REMOVE;
-                        });
-
-                        delayOffset += 400; // 400ms stagger interval per app
-                    }
+                        } catch (err) {
+                            this._log('ERROR', `Failed to launch ${item.app_id} (window ${currentCount + 1}): ${err}`);
+                        }
+                        return GLib.SOURCE_REMOVE;
+                    });
+                    this._restoreTimeoutIds.push(launchTid);
+                    delayOffset += 400; // 400ms stagger interval per window
                 } else {
                     this._log('WARN', `Could not find desktop app for ID: ${item.app_id}`);
                 }
