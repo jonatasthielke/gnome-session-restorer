@@ -17,7 +17,7 @@ A lightweight, high-performance, automatic session saving and window restoration
 ### Option A: Direct Installation (No Git Required)
 Run this single command in your terminal to install the release package directly:
 ```bash
-gnome-extensions install https://github.com/jonatasthielke/gnome-session-restorer/archive/refs/tags/v1.0.0.zip
+gnome-extensions install https://github.com/jonatasthielke/gnome-session-restorer/archive/refs/tags/v1.0.1.zip
 ```
 
 ### Option B: Clone Repository
