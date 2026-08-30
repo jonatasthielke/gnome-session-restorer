@@ -68,6 +68,11 @@ export default class SessionRestorer extends Extension {
             this._windowCreatedId = 0;
         }
 
+        if (this._globalRestoreSignalId) {
+            this._display.disconnect(this._globalRestoreSignalId);
+            this._globalRestoreSignalId = 0;
+        }
+
         if (this._sessionProxy && this._shutdownSignalId) {
             this._sessionProxy.disconnectSignal(this._shutdownSignalId);
             this._shutdownSignalId = 0;
@@ -346,11 +351,70 @@ export default class SessionRestorer extends Extension {
             this._log('INFO', `Session signature verified successfully. Restoring ${session.apps.length} apps in Z-index stack order.`);
 
             let launchedApps = new Set();
+            let matchedWindows = new Set();
+            let workspaceManager = global.workspace_manager;
+
+            // Global window-created signal listener for single-pass 1-to-1 window matching
+            this._globalRestoreSignalId = this._display.connect('window-created', (display, win) => {
+                if (matchedWindows.has(win)) return;
+
+                let winAppId = this._resolveAppForWindow(win);
+                let wmClass = win.get_wm_class ? win.get_wm_class() : null;
+
+                // Find the first unmatched stored item that corresponds to this newly created window
+                let targetItem = session.apps.find(item => {
+                    if (item._matched) return false;
+                    let isMatch = (winAppId && winAppId === item.app_id) || 
+                                  (wmClass && item.app_id.toLowerCase().includes(wmClass.toLowerCase()));
+                    return isMatch;
+                });
+
+                if (targetItem) {
+                    targetItem._matched = true;
+                    matchedWindows.add(win);
+
+                    GLib.timeout_add(GLib.PRIORITY_DEFAULT, 300, () => {
+                        try {
+                            if (win && win.get_workspace) {
+                                this._log('INFO', `Restoring window position for ${targetItem.app_id} [Stack Z-index ${targetItem.stack_index || 0}]: (${targetItem.x}, ${targetItem.y}) ${targetItem.width}x${targetItem.height}`);
+                                
+                                // Restore workspace assignment
+                                if (targetItem.workspace !== undefined && workspaceManager) {
+                                    let ws = workspaceManager.get_workspace_by_index(targetItem.workspace);
+                                    if (ws && win.change_workspace) {
+                                        win.change_workspace(ws);
+                                    }
+                                }
+
+                                win.move_resize_frame(false, targetItem.x, targetItem.y, targetItem.width, targetItem.height);
+
+                                if (targetItem.is_maximized && win.maximize) {
+                                    win.maximize(Meta.MaximizeFlags.BOTH);
+                                }
+
+                                if (win.raise) {
+                                    win.raise();
+                                }
+                            }
+                        } catch (err) {}
+                        return GLib.SOURCE_REMOVE;
+                    });
+                }
+            });
+
+            // Disconnect global restore listener after 15 seconds
+            GLib.timeout_add(GLib.PRIORITY_DEFAULT, 15000, () => {
+                if (this._globalRestoreSignalId) {
+                    this._display.disconnect(this._globalRestoreSignalId);
+                    this._globalRestoreSignalId = 0;
+                }
+                return GLib.SOURCE_REMOVE;
+            });
 
             // Staggered launch queue: launch apps with 400ms delay between each app to prevent boot CPU/RAM I/O storms
             let delayOffset = 0;
 
-            session.apps.forEach((item, index) => {
+            session.apps.forEach((item) => {
                 if (!item.app_id || typeof item.app_id !== 'string') return;
 
                 // Security Check: Sanitize app_id against directory traversal or suspicious paths
@@ -376,42 +440,6 @@ export default class SessionRestorer extends Extension {
 
                         delayOffset += 400; // 400ms stagger interval per app
                     }
-
-                    // Connect to new windows of this app to position them and raise them in stack order
-                    let onWindowCreated = (display, win) => {
-                        let winAppId = this._resolveAppForWindow(win);
-                        let wmClass = win.get_wm_class ? win.get_wm_class() : null;
-
-                        let isMatch = (winAppId && winAppId === item.app_id) || 
-                                      (wmClass && item.app_id.toLowerCase().includes(wmClass.toLowerCase()));
-
-                        if (isMatch) {
-                            GLib.timeout_add(GLib.PRIORITY_DEFAULT, 300 + (index * 50), () => {
-                                try {
-                                    if (win && win.get_workspace) {
-                                        this._log('INFO', `Restoring window position for ${item.app_id} [Stack Z-index ${item.stack_index || 0}]: (${item.x}, ${item.y}) ${item.width}x${item.height}`);
-                                        win.move_resize_frame(false, item.x, item.y, item.width, item.height);
-
-                                        if (item.is_maximized && win.maximize) {
-                                            win.maximize(Meta.MaximizeFlags.BOTH);
-                                        }
-
-                                        // Raise window to enforce Z-index stack order
-                                        if (win.raise) {
-                                            win.raise();
-                                        }
-                                    }
-                                } catch (err) {}
-                                return GLib.SOURCE_REMOVE;
-                            });
-                        }
-                    };
-
-                    let signalId = this._display.connect('window-created', onWindowCreated);
-                    GLib.timeout_add(GLib.PRIORITY_DEFAULT, 7000, () => {
-                        this._display.disconnect(signalId);
-                        return GLib.SOURCE_REMOVE;
-                    });
                 } else {
                     this._log('WARN', `Could not find desktop app for ID: ${item.app_id}`);
                 }
