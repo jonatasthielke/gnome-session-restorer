@@ -8,6 +8,7 @@ export default class SessionRestorer extends Extension {
     enable() {
         this._configDir = GLib.build_filenamev([GLib.get_user_config_dir(), 'gnome-session-restorer']);
         this._sessionFile = GLib.build_filenamev([this._configDir, 'session.json']);
+        this._keyFile = GLib.build_filenamev([this._configDir, '.key']);
         this._isShuttingDown = false;
         this._windowSignals = new Map();
         this._saveTimeoutId = 0;
@@ -66,6 +67,24 @@ export default class SessionRestorer extends Extension {
             } catch (e) {}
         }
         this._windowSignals.clear();
+    }
+
+    _getSecretKey() {
+        if (GLib.file_test(this._keyFile, GLib.FileTest.EXISTS)) {
+            let [success, contents] = GLib.file_get_contents(this._keyFile);
+            if (success) return new TextDecoder().decode(contents).trim();
+        }
+
+        let randomSeed = `${GLib.get_monotonic_time()}-${GLib.get_host_name()}-${Math.random()}`;
+        let secretKey = GLib.compute_checksum_for_string(GLib.ChecksumType.SHA256, randomSeed);
+        GLib.file_set_contents(this._keyFile, secretKey);
+        GLib.chmod(this._keyFile, 0o600);
+        return secretKey;
+    }
+
+    _computeHMAC(dataString) {
+        let secretKey = this._getSecretKey();
+        return GLib.compute_checksum_for_string(GLib.ChecksumType.SHA256, `${dataString}:${secretKey}`);
     }
 
     _connectShutdownSignals() {
@@ -173,9 +192,13 @@ export default class SessionRestorer extends Extension {
                 return;
             }
 
-            let data = JSON.stringify({ timestamp: Date.now(), apps: openApps }, null, 2);
+            let payloadObj = { timestamp: Date.now(), apps: openApps };
+            let payloadStr = JSON.stringify(payloadObj);
+            let signature = this._computeHMAC(payloadStr);
+
+            let data = JSON.stringify({ ...payloadObj, signature }, null, 2);
             GLib.file_set_contents(this._sessionFile, data);
-            console.log('[Session Restorer] Saved open session apps:', openApps.length);
+            console.log('[Session Restorer] Saved open session apps with signature verification:', openApps.length);
         } catch (e) {
             console.error('[Session Restorer] Error saving session:', e);
         }
@@ -191,9 +214,22 @@ export default class SessionRestorer extends Extension {
             if (!success) return;
 
             let session = JSON.parse(new TextDecoder().decode(contents));
-            if (!session || !session.apps || session.apps.length === 0) return;
+            if (!session || !session.apps || session.apps.length === 0 || !session.signature) {
+                console.warn('[Session Restorer] Invalid session file structure or missing signature.');
+                return;
+            }
 
-            console.log('[Session Restorer] Restoring session with apps:', session.apps.length);
+            // Cryptographic HMAC Integrity Check
+            let { signature, ...payloadObj } = session;
+            let payloadStr = JSON.stringify(payloadObj);
+            let expectedSignature = this._computeHMAC(payloadStr);
+
+            if (signature !== expectedSignature) {
+                console.error('[Session Restorer] SECURITY WARNING: Session file signature mismatch! Tampering detected. Session discarded.');
+                return;
+            }
+
+            console.log('[Session Restorer] Session signature verified successfully. Restoring apps:', session.apps.length);
 
             let appSystem = Shell.AppSystem.get_default();
             let launchedApps = new Set();
