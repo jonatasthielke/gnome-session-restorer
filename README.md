@@ -57,13 +57,22 @@ journalctl --user -u gnome-shell -f | grep "[Session Restorer]"
 
 ## Development & Contributions
 
-### Extension Path
-`~/.local/share/gnome-shell/extensions/session-restorer@thielke`
+Contributions are welcome! Please follow these steps to submit a Pull Request:
 
-### Pushing Updates
-```bash
-cd ~/.local/share/gnome-shell/extensions/session-restorer@thielke
-git add .
-git commit -m "Describe your changes"
-git push origin main
-```
+1. **Fork** the repository on GitHub.
+2. **Clone** your fork to your local GNOME extensions directory:
+   ```bash
+   git clone https://github.com/<your-username>/gnome-session-restorer.git ~/.local/share/gnome-shell/extensions/session-restorer@thielke
+   ```
+3. **Create a branch** for your feature or fix:
+   ```bash
+   git checkout -b feature/my-feature-name
+   ```
+4. **Commit** your changes:
+   ```bash
+   git commit -m "Add descriptive commit message"
+   ```
+5. **Push** to your fork and open a **Pull Request**:
+   ```bash
+   git push origin feature/my-feature-name
+   ```
