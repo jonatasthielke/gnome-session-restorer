@@ -142,6 +142,12 @@ export default class SessionRestorer extends Extension {
                 }
             }
 
+            // Protective Guard: Never overwrite session with an empty list if shutting down or if windows were already closed by OS!
+            if (openApps.length === 0) {
+                console.log('[Session Restorer] Skipping overwrite: openApps list is empty.');
+                return;
+            }
+
             let data = JSON.stringify({ timestamp: Date.now(), apps: openApps }, null, 2);
             GLib.file_set_contents(this._sessionFile, data);
             console.log('[Session Restorer] Saved open session apps:', openApps.length);
