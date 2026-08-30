@@ -76,3 +76,12 @@ Contributions are welcome! Please follow these steps to submit a Pull Request:
    ```bash
    git push origin feature/my-feature-name
    ```
+
+## License & Terms of Use
+
+This project is licensed under the **MIT License**.
+
+- You are free to use, modify, distribute, and integrate this software in private or commercial projects.
+- **Disclaimer of Liability**: The software is provided "AS IS", without warranty of any kind. The author (Jonatas Thielke) shall not be liable for any claims, damages, or liabilities arising from the use of this software.
+
+See the full [LICENSE](LICENSE) file for details.
