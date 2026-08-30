@@ -34,8 +34,16 @@ export default class SessionRestorer extends Extension {
             this._onWindowCreated(window);
         });
 
-        // Track existing windows on extension startup
+        // Listen for workspace addition/removal events
         let workspaceManager = global.workspace_manager;
+        this._wsAddedId = workspaceManager.connect('workspace-added', () => {
+            if (!this._isShuttingDown) this._saveCurrentSessionDebounced();
+        });
+        this._wsRemovedId = workspaceManager.connect('workspace-removed', () => {
+            if (!this._isShuttingDown) this._saveCurrentSessionDebounced();
+        });
+
+        // Track existing windows on extension startup
         let nWorkspaces = workspaceManager.n_workspaces;
         for (let i = 0; i < nWorkspaces; i++) {
             let ws = workspaceManager.get_workspace_by_index(i);
@@ -66,6 +74,16 @@ export default class SessionRestorer extends Extension {
         if (this._windowCreatedId) {
             this._display.disconnect(this._windowCreatedId);
             this._windowCreatedId = 0;
+        }
+
+        let workspaceManager = global.workspace_manager;
+        if (workspaceManager && this._wsAddedId) {
+            workspaceManager.disconnect(this._wsAddedId);
+            this._wsAddedId = 0;
+        }
+        if (workspaceManager && this._wsRemovedId) {
+            workspaceManager.disconnect(this._wsRemovedId);
+            this._wsRemovedId = 0;
         }
 
         if (this._globalRestoreSignalId) {
@@ -251,6 +269,24 @@ export default class SessionRestorer extends Extension {
             }
         });
 
+        let wsId = window.connect('workspace-changed', () => {
+            if (!this._isShuttingDown) {
+                this._saveCurrentSessionDebounced();
+            }
+        });
+
+        let maxVId = window.connect('notify::maximized-vert', () => {
+            if (!this._isShuttingDown) {
+                this._saveCurrentSessionDebounced();
+            }
+        });
+
+        let maxHId = window.connect('notify::maximized-horiz', () => {
+            if (!this._isShuttingDown) {
+                this._saveCurrentSessionDebounced();
+            }
+        });
+
         let unmanageId = window.connect('unmanaging', () => {
             if (this._windowSignals.has(window)) {
                 let signals = this._windowSignals.get(window);
@@ -264,7 +300,7 @@ export default class SessionRestorer extends Extension {
             }
         });
 
-        this._windowSignals.set(window, [rectId, unmanageId]);
+        this._windowSignals.set(window, [rectId, wsId, maxVId, maxHId, unmanageId]);
     }
 
     _saveCurrentSessionDebounced() {
@@ -464,7 +500,7 @@ export default class SessionRestorer extends Extension {
                 }
             });
         } catch (e) {
-            this._log('ERROR', `Error saving session: ${e}`);
+            this._log('ERROR', `Error restoring session: ${e}`);
         }
     }
 }
